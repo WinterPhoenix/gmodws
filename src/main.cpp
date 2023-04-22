@@ -1,9 +1,11 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <pthread.h>
-#include "SteamUtils.h"
+//#include "SteamUtils.h"
+#include "../sdk/public/steam/isteamutils.h"
 #include "SteamEngine.h"
-#include "SteamUGC.h"
+//#include "SteamUGC.h"
+#include "../sdk/public/steam/isteamugc.h"
 #include "SteamUser.h"
 #include <chrono>
 #include <string>
@@ -33,22 +35,6 @@ int userHdl = 0;
 
 std::ostream debug(0);
 
-struct CallbackMsg_t
-{
-    int m_hSteamUser;
-    int m_iCallback;
-    char *m_pubParam; 
-    int m_cubParam;
-};
-
-struct SubmitItemUpdateResult_t
-{
-	enum { k_iCallback = 3400 + 4 };
-	int m_eResult;
-	bool m_bUserNeedsToAcceptWorkshopLegalAgreement;
-	unsigned long long m_nPublishedFileId;
-};
-
 time_t GetTime() {
     return std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
 }
@@ -59,55 +45,52 @@ bool file_exists (const std::string& file) {
 }
 
 int WaitForLogin() {
-    int status = 0;
     while(true) {
         CallbackMsg_t c;
         g_pEngine->RunFrame();
+
         if(GetCallback(steamPipe, &c)) {
             FreeLastCallback(steamPipe);
-            
+
             switch(c.m_iCallback) {
-                case 987:
-                    status |= 1;
-                    break;
-                case 101:
-                    status |= 2;
-                    break;
-                case 5801:
-                    status |= 4;
-                    break;
-                case 102:
+                case SteamServersConnected_t::k_iCallback:
+                    return 1;
+                case SteamServerConnectFailure_t::k_iCallback:
                     return 0;
                 default:
                     break;
             }
-            if(status == 7)
-                return 1;
         }
     }
 }
 
-int Workshop_Func(char** args, int num_args) {	
+extern "C" void __cdecl SteamAPIDebugTextHook( int nSeverity, const char *pchDebugText )
+{
+    debug << pchDebugText << std::endl;
+}
+
+int Workshop_Func(char** args, int num_args) {
     if(num_args < 3) {
         std::cout << "Insufficient supplied arguments!" << std::endl;
         return 1;
     }
-    
+
     userHdl = g_pEngine->CreateGlobalUser(&steamPipe);
-    SteamUtils* utils = (SteamUtils*)g_pEngine->GetIClientUtils(steamPipe);
+    ISteamUtils* utils = (ISteamUtils*)g_pEngine->GetIClientUtils(steamPipe);
     SteamUser* user = (SteamUser*)g_pEngine->GetIClientUser(steamPipe,userHdl);
-    IUGC* ugc = (IUGC*)g_pEngine->GetIClientUGC(steamPipe, userHdl);
+    ISteamUGC* ugc = (ISteamUGC*)g_pEngine->GetIClientUGC(steamPipe, userHdl);
+    utils->SetWarningMessageHook( &SteamAPIDebugTextHook );
 
     debug << "IUGC: " << ugc << std::endl;
     debug << "Set CCheckCallback" << std::endl;
     g_pEngine->Set_Client_API_CCheckCallbackRegisteredInProcess(0);
     g_pEngine->RunFrame();
-    
+
     if(!utils) {
         std::cout << "Could not acquire Utils interface!" << std::endl;
         return 1;
     }
-    
+
     if(!user) {
         std::cout << "Could not acquire User interface!" << std::endl;
         return 1;
@@ -117,9 +100,9 @@ int Workshop_Func(char** args, int num_args) {
         std::cout << "Could not acquire UGC interface!" << std::endl;
         return 1;
     }
-    
+
     debug << "Setting Creds: " << args[1] << std::endl;
-    
+
     int login_result = user->SetAccountNameForCachedCredentialLogin(args[1], 0);
     if(!login_result) {
         std::cout << "Cached login credentials not available." << std::endl;
@@ -132,22 +115,22 @@ int Workshop_Func(char** args, int num_args) {
 
     user->RaiseConnectionPriority(2, 13);
     std::cout << "Trying logon state...." << std::endl;
-    
+
     if(login_result) {
-        CSteamID s = user->GetSteamID();	
-        std::cout << "STEAMID:" << s.m_unAll64Bits << std::endl;
+        CSteamID s = user->GetSteamID();
+        std::cout << "STEAMID:" << s.ConvertToUint64() << std::endl;
         user->LogOn(s);
     } else {
         user->SetLoginInformation(args[1], std::getenv("STEAM_PASSWORD"), 1);
-        CSteamID s = user->GetSteamID();	
+        CSteamID s = user->GetSteamID();
         user->LogOn(s);
     }
-        
+
     if(!WaitForLogin()) {
         std::cout << "Login failed. Please check credentials and try again." << std::endl;
         return 1;
     }
-    
+
     std::cout << "Logged in." << std::endl;
 
     std::string sWorkshopIdentifier = args[2];
@@ -162,7 +145,7 @@ int Workshop_Func(char** args, int num_args) {
     std::cout << "Starting Item Update." << std::endl;
     unsigned long long update_handle = ugc->StartItemUpdate(4000, id);
     debug << "Update handle: " << update_handle << std::endl;
-    
+
     std::filesystem::path p = args[3];
     auto absPath = std::filesystem::absolute(p);
     debug << "Absolute path: " << absPath << std::endl;
@@ -198,8 +181,8 @@ int Workshop_Func(char** args, int num_args) {
         ugc->GetItemUpdateProgress(update_handle, &current, &total);
 
         if(current > 0 && total > 0 && current != lastCurrent) {
-            std::cout << "Progress: " << std::setprecision(4) 
-            << std::left << (double)current/total*100 
+            std::cout << "Progress: " << std::setprecision(4)
+            << std::left << (double)current/total*100
             << std::setw(20) << "%" << "\r" << std::flush;
             lastCurrent = current;
         }
@@ -213,7 +196,7 @@ int Workshop_Func(char** args, int num_args) {
 
     SubmitItemUpdateResult_t updateRes;
     bool pbFailed = 0;
-    bool callResultStatus = utils->GetAPICallResult(call_result, &updateRes, sizeof(SubmitItemUpdateResult_t), 3404, &pbFailed);
+    bool callResultStatus = utils->GetAPICallResult(call_result, &updateRes, sizeof(SubmitItemUpdateResult_t), SubmitItemUpdateResult_t::k_iCallback, &pbFailed);
     debug << "pbFailed: " << pbFailed << std::endl;
     debug << "CallResultStatus: " << callResultStatus << std::endl;
     debug << "m_eResult: " << updateRes.m_eResult << std::endl;
@@ -238,12 +221,12 @@ int Workshop_Func(char** args, int num_args) {
 int main(int argc, char** argv) {
     std::cout << "Loaded." << std::endl;
     void* steam = dlopen("steamclient.so", RTLD_NOW);
-    
+
     if(!steam) {
         std::cout << "steamclient not present!" << std::endl;
         return 1;
     }
-    
+
     GetCallback = (CallbackFunc)dlsym(steam, "Steam_BGetCallback");
     FreeLastCallback = (FreeCallbackFunc)dlsym(steam, "Steam_FreeLastCallback");
 
@@ -252,12 +235,12 @@ int main(int argc, char** argv) {
 
     typedef void*(*InterfaceFunc)(const char*, int);
     InterfaceFunc steamIface = (InterfaceFunc)dlsym(steam, "CreateInterface");
-    
+
     if(!steamIface) {
         std::cout << "CreateInterface function not present!" << std::endl;
         return 1;
     }
-    
+
     g_pEngine = (IEngine*)steamIface("CLIENTENGINE_INTERFACE_VERSION005", 0);
 
     if(!g_pEngine) {

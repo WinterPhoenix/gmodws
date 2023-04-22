@@ -1,3 +1,4 @@
+#include "SteamAPIInternal.h"
 
 class IUGC
 {
@@ -85,6 +86,14 @@ public:
     virtual void RemoveAppDependency(unsigned long long,unsigned int);
     virtual void GetAppDependencies(unsigned long long);
     virtual void DeleteItem(unsigned long long);
+    virtual bool ShowWorkshopEULA();
+    virtual void GetWorkshopEULAStatus();
 };
 
-
+struct SubmitItemUpdateResult_t
+{
+    enum { k_iCallback = k_iSteamUGCCallbacks + 4 };
+    int m_eResult;
+    bool m_bUserNeedsToAcceptWorkshopLegalAgreement;
+    unsigned long long m_nPublishedFileId;
+};
